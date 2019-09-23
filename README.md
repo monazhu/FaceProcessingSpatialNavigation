@@ -1,1 +1,1 @@
-# Study Relating Facial Processing with Spatial Processing
+# Study Relating Facial Processing with Spatial Abilities
