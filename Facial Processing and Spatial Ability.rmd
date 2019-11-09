@@ -1,0 +1,255 @@
+---
+title: "Facial Processing and Spatial Ability"
+author: Mona Zhu
+date: Updated November 9, 2019
+output: 
+  html_document:
+    fig_width: 8
+    fig_height: 5
+    toc: true
+    toc_float: true
+    theme: cerulean
+    highlight: tango
+    code_folding: hide
+---
+
+<style>
+pre code, pre, code {
+  overflow-y: auto !important;
+  max-height: 20em;
+}
+</style>
+
+```{r}
+# libraries
+library(dplyr)
+library(plyr)
+library(reshape2)
+library(stringr)
+library(openxlsx)
+library(corrgram)
+library(tidyverse)
+library(corrplot)
+```
+
+# Making Wishlist
+
+```{r Importing Libraries, warning=F}
+# convert character class into numeric class
+date<-"21Oct2019"
+
+wishlist<-function(mt){ # process mt in order to create wishlist
+  raw<-read.csv(mt, stringsAsFactors = F) # import wq questionnaire section as data frame
+  num<-raw %>% 
+    mutate_if(is.character,as.numeric)
+  num$score<-rowMeans(num[c(2:23)])
+  num$code=ifelse(is.na(num$score), 0, 1) # 1 if we want to use them on wishlist and 0 if we don't
+  comp<-num[c(1, 25)]
+  write.table(comp, paste0("Wishlist_", date, ".txt"), sep=" ", row.names=F, col.names=F) # create a txt file with the information required for the wishlist
+}
+
+wishlist("MT Processed_21Oct2019.csv")
+```
+
+# Reading Data File
+
+```{r Data Import}
+# read the qualtrics data, removing the 2 extra columns at the top that are unnecessary
+raw<-read.csv("Examining Aspects of Visuospatial Processing_November 8, 2019_14.14.csv",
+              stringsAsFactors = FALSE)[-c(1:2),] 
+
+# only look at participants that completed the task
+# as well as remove our pilot data (i.e., first 3 rows)
+df<-subset(raw, Progress==100)[-c(1:3),]
+
+```
+
+# Route Tracing Task & Scoring
+
+In this task, participants are told to retrace the path they watched on a video by indicating the intersection they passed through.
+
+```{r Route Scoring}
+# correct routes:
+CorRoute<-c("AH", "HE", "EF", "FA", "Ac", "CK", "KG", "GB", "BY")
+
+# Obtain only the columns with the route drawing + id
+route<-cbind(id=df$id, df[ , grepl( "RouteDraw" , names(df))])
+route <- mutate_each(route, funs(toupper)) # turn everything into upper cases
+
+# Create a long data frame
+route.raw<-melt(route, id=c(1),
+              variable.name = "RouteOrder", value.name = "Response")
+route.raw$Response<-car::recode(route.raw$Response, "''= NA") # recode empty cells as NAs
+route.l<-route.raw[complete.cases(route.raw),] # remove subjects with "NA" responses
+route.l$Response<- str_replace(route.l$Response, "EXIT ", "") # replace the word "exit"
+
+ids<-unique(route.l$id) # create variable called "ids" with all the unique SONA ids
+route.c<-NULL # empty data frame
+
+# forloop that calculates the accuracy score for the route trace
+
+for (i in ids){
+  sub<-subset(route.l, id==i)
+  corr<-CorRoute
+  for (j in 1:nrow(sub)){
+    if (sub$Response[j]==sub$Response[1]) {
+      sub$Path[j] <- ifelse(sub$Response[j]=="A", NA, paste0("A", sub$Response[j]))
+    } else if (sub$Response[j]!=sub$Response[1]){
+      sub$Path[j] <- paste0(sub$Response[j-1], sub$Response[j])
+    }
+  }
+  for(k in 1:nrow(sub)){
+    if (is.na(sub$Path[k])) {
+      sub$RouteAcc[k]<-NA
+    } else if (sub$Path[k] %in% corr) {
+      sub$RouteAcc[k]<-1
+      corr<-corr[!corr %in% sub$Path[k]]
+    } else {
+      sub$RouteAcc[k]<-0
+    }
+  }  
+  route.c<-rbind(route.c, sub)  
+}
+
+
+RouteTrace<-ddply(route.c, c("id"), summarise,
+                  RoutePercCorr=sum(RouteAcc, na.rm=T)/9)
+```
+
+# CFMT & MR Calculation
+
+```{r Scoring Face Task & Mental Rotation}
+df$cfmt<-as.numeric(df$SC9)/72 
+df$mr<-as.numeric(df$SC10)/56 
+```
+
+# Wayfinding Questionnaire
+
+```{r Scoring Wayfinding Q's}
+mt<-read.xlsx("F19_MT_and_PS_Oct21.xlsx", sheet = 1, colNames=T)
+wq<-cbind(id=mt$id, mt[ , grepl( "WQ_" , names(mt))])
+wq$id<-as.character(wq$id)
+wq_sub<-subset(wq, id %in% ids)
+
+
+# reverse scoring 8-15
+col<-names(wq_sub)[c(9:16)]
+wq_sub[,col] = 8 - wq_sub[,col]
+
+# navigation & orientation: 1-3, 6, 7, 16, 18-22
+wq_sub$nav<-rowMeans(wq_sub[c(2:4, 7:8, 17, 19:23)])
+
+# spatial anxiety: 8-15 reverse coded
+wq_sub$anx<-rowMeans(wq_sub[c(9:16)])
+
+# distance estimation: 4,5,17
+wq_sub$dist<-rowMeans(wq_sub[c(5,6,18)])
+
+# total score (sum)
+wq_sub$WQ_Total<-rowSums(wq_sub[c(2:23)]) 
+```
+
+# Pointing Task
+
+```{r Pointing Task}
+PT<-df[c(1357:1362,1405)]
+#Bows
+PT$PointBows<-as.numeric(PT$PointBows)
+PT$Bows.Acc <- abs(48-PT$PointBows)
+
+#Chairs
+PT$PointChairs <- as.numeric(PT$PointChairs)
+PT$Chairs.Acc <-abs(42-PT$PointChairs)
+
+#hat
+PT$PointHat <-as.numeric(PT$PointHat)
+PT$Hat.Acc <-abs(65-PT$PointHat)
+
+#flower
+PT$PointFlower <-as.numeric(PT$PointFlower)
+PT$Flower.Acc <-abs(104-PT$PointFlower)
+
+#flamingo
+PT$PointFlamingo <-as.numeric(PT$PointFlamingo)
+PT$Flamingo.Acc<-abs(117-PT$PointFlamingo)
+
+#Snowflakes
+PT$Q74.3 <-as.numeric(PT$Q74.3)
+PT$Snowflakes.Acc <-abs(132-PT$Q74.3)
+
+
+#Average Degrees Off
+PT$Pointing.Acc <- rowMeans(PT[,8:13], na.rm = TRUE)
+
+```
+
+
+
+# All Scores
+
+```{r Corrgram}
+all<-base::merge(wq_sub[c(1, 28:31)], RouteTrace, by="id")
+all<-base::merge(all, PT[c("id", "Pointing.Acc")], by="id")
+all<-base::merge(all, df[c("id", "mr", "cfmt")], by="id")
+
+# renaming variables
+names(all)<-c("id", "WQ_Navigation", "WQ_Anxiety", "WQ_Distance", "WQ_Total", 
+              "RouteRetrace", "PointDirection", "MentalRotation", "FaceRecognition")
+
+cormat<-cor(all[c(2:ncol(all))])
+res1 <- cor.mtest(all[c(2:ncol(all))], conf.level = .95)
+
+corrgram(all[c(2:ncol(all))],
+         lower.panel=panel.pts, upper.panel=panel.conf,
+         diag.panel=panel.density)
+```
+
+
+
+```{r Correlation Plot}
+corrplot.mixed(cormat, lower="number", lower.col="black", p.mat = res1$p, sig.level = .05)
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
