@@ -1,0 +1,736 @@
+---
+title: "Facial Processing and Spatial Ability E1"
+author: Mona Zhu
+date: Updated February 19, 2019
+output: 
+  html_document:
+    fig_width: 8
+    fig_height: 5
+    toc: true
+    toc_float: true
+    theme: cerulean
+    highlight: tango
+    code_folding: hide
+---
+
+<style>
+pre code, pre, code {
+  overflow-y: auto !important;
+  max-height: 20em;
+}
+</style>
+
+```{r, warning=F, message=F}
+# libraries
+library(plyr)
+library(reshape2)
+library(stringr)
+library(openxlsx)
+library(corrgram)
+library(tidyverse)
+library(corrplot)
+library(sjPlot)
+library(psych)
+library(lavaan)
+library(wesanderson)
+```
+
+<!-- # Making Wishlist -->
+
+<!-- ```{r Importing Libraries, warning=F} -->
+<!-- # convert character class into numeric class -->
+<!-- date<-"21Oct2019" -->
+
+<!-- wishlist<-function(mt){ # process mt in order to create wishlist -->
+<!--   raw<-read.csv(mt, stringsAsFactors = F) # import wq questionnaire section as data frame -->
+<!--   num<-raw %>%  -->
+<!--     mutate_if(is.character,as.numeric) -->
+<!--   num$score<-rowMeans(num[c(2:23)]) -->
+<!--   num$code=ifelse(is.na(num$score), 0, 1) # 1 if we want to use them on wishlist and 0 if we don't -->
+<!--   comp<-num[c(1, 25)] -->
+<!--   write.table(comp, paste0("Wishlist_", date, ".txt"), sep=" ", row.names=F, col.names=F) # create a txt file with the information required for the wishlist -->
+<!-- } -->
+
+<!-- wishlist("MT Processed_21Oct2019.csv") -->
+<!-- ``` -->
+
+Reading in data files:
+
+```{r Data Import}
+# read the qualtrics data, removing the 2 extra columns at the top that are unnecessary
+raw<-read.csv("Examining Aspects of Visuospatial Processing – E1_February 18, 2020_15.41.csv",
+              stringsAsFactors = FALSE)[-c(1:2),] 
+
+# only look at participants that completed the task
+# & removed our pilot data (i.e., first 3 rows)
+# & mental rotation score when items were identical at rotation = 0 degrees > 80% accuracy
+# & removed individuals who self-reported not caring
+df<-subset(raw, Progress==100 & id!="" & Amnesty.Coded==1)
+
+```
+
+# Route Tracing Task & Scoring
+
+In this task, participants are told to retrace the path they watched on a video by indicating the intersection they passed through.
+
+```{r Route Scoring, warning=F, message=F}
+# correct routes:
+CorRoute<-c("AH", "HE", "EF", "FA", "Ac", "CK", "KG", "GB", "BY")
+
+# Obtain only the columns with the route drawing + id
+route<-cbind(id=df$id, df[ , grepl( "RouteDraw" , names(df))])
+route <- mutate_each(route, funs(toupper)) # turn everything into upper cases
+
+# Create a long data frame
+route.raw<-melt(route, id=c(1),
+              variable.name = "RouteOrder", value.name = "Response")
+route.raw$Response<-car::recode(route.raw$Response, "''= NA") # recode empty cells as NAs
+route.l<-route.raw[complete.cases(route.raw),] # remove subjects with "NA" responses
+route.l$Response<- str_replace(route.l$Response, "EXIT ", "") # replace the word "exit"
+
+ids<-unique(route.l$id) # create variable called "ids" with all the unique SONA ids
+route.c<-NULL # empty data frame
+
+# forloop that calculates the percent correct score for the route trace
+
+for (i in ids){
+  sub<-subset(route.l, id==i)
+  corr<-CorRoute
+  for (j in 1:nrow(sub)){
+    if (sub$Response[j]==sub$Response[1]) {
+      sub$Path[j] <- ifelse(sub$Response[j]=="A", NA, paste0("A", sub$Response[j]))
+    } else if (sub$Response[j]!=sub$Response[1]){
+      sub$Path[j] <- paste0(sub$Response[j-1], sub$Response[j])
+    }
+  }
+  for(k in 1:nrow(sub)){
+    if (is.na(sub$Path[k])) {
+      sub$RouteAcc[k]<-NA
+    } else if (sub$Path[k] %in% corr) {
+      sub$RouteAcc[k]<-1
+      corr<-corr[!corr %in% sub$Path[k]]
+    } else {
+      sub$RouteAcc[k]<-0
+    }
+  }  
+  route.c<-rbind(route.c, sub)  
+}
+
+
+RouteTrace<-ddply(route.c, c("id"), summarise,
+                  RoutePercCorr=sum(RouteAcc, na.rm=T)/9)
+```
+
+# CFMT & MR Calculation
+
+```{r Scoring Face Task & Mental Rotation}
+df$cfmt<-as.numeric(df$SC9)/72 
+df$mr<-as.numeric(df$SC10)/56 
+```
+
+# Wayfinding Questionnaire
+
+```{r Scoring Wayfinding Qns}
+mt<-read.xlsx("F19_MT_and_PS_Oct21.xlsx", sheet = 1, colNames=T)
+wq<-cbind(id=mt$id, mt[ , grepl( "WQ_\\d+" , names(mt))])
+wq<-wq[complete.cases((wq)),]
+wq$id<-as.character(wq$id)
+
+for (i in 1:nrow(wq)){
+  wq$var[i]<-sd(wq[i, 2:23])
+}
+
+wq_sub<-subset(wq, id %in% ids)
+
+
+# reverse scoring 8-15
+col<-names(wq_sub)[c(9:16)] # reverse code items 8 - 15 according to Claessen et al's paper
+wq_sub[,col] = 8 - wq_sub[,col] # reverse code
+
+# navigation & orientation: 1-3, 6, 7, 16, 18-22
+wq_sub$nav<-rowMeans(wq_sub[c(2:4, 7:8, 17, 19:23)])
+
+# spatial anxiety: 8-15 reverse coded
+wq_sub$anx<-rowMeans(wq_sub[c(9:16)])
+
+# distance estimation: 4,5,17
+wq_sub$dist<-rowMeans(wq_sub[c(5,6,18)])
+
+# total score (sum)
+wq_sub$WQ_Total<-rowSums(wq_sub[c(2:23)]) 
+```
+
+# Pointing Task
+
+```{r Pointing Task}
+PT<-df[c(1357:1362,1407)]
+#Bows
+PT$PointBows<-as.numeric(PT$PointBows)
+PT$Bows.Acc <- abs(48-PT$PointBows)
+
+#Chairs
+PT$PointChairs <- as.numeric(PT$PointChairs)
+PT$Chairs.Acc <-abs(42-PT$PointChairs)
+
+#hat
+PT$PointHat <-as.numeric(PT$PointHat)
+PT$Hat.Acc <-abs(65-PT$PointHat)
+
+#flower
+PT$PointFlower <-as.numeric(PT$PointFlower)
+PT$Flower.Acc <-abs(104-PT$PointFlower)
+
+#flamingo
+PT$PointFlamingo <-as.numeric(PT$PointFlamingo)
+PT$Flamingo.Acc<-abs(117-PT$PointFlamingo)
+
+#Snowflakes
+PT$Q74.3 <-as.numeric(PT$Q74.3)
+PT$Snowflakes.Acc <-abs(132-PT$Q74.3)
+
+
+#Average Degrees Off
+PT$Pointing.Acc <- rowMeans(PT[,8:13], na.rm = TRUE)
+
+```
+
+
+
+# All Scores
+
+```{r Corrgram}
+all<-base::merge(wq_sub[,c("id","var", "nav", "anx", "dist", "WQ_Total")], RouteTrace, by="id")
+all<-base::merge(all, PT[,c("id", "Pointing.Acc")], by="id")
+all<-base::merge(all, df[,c("id", "Gender", "Prev.Exp", "mr", "cfmt")], by="id")
+all<-subset(all, var!=0)
+
+# renaming variables
+names(all)<-c("id", "WQ_Variance", "WQ_Navigation", "WQ_Anxiety", "WQ_Distance", "WQ_Total", 
+              "RouteRetrace", "LandmarkDirection", "Gender", "Familiarity", "MentalRotation",
+              "FaceRecognition")
+all<-all[c("id","Gender", "Familiarity", "WQ_Navigation", "WQ_Anxiety", "WQ_Distance",
+           "WQ_Total", "RouteRetrace", "LandmarkDirection", "MentalRotation", "FaceRecognition")]
+all$Gender<-factor(car::recode(all$Gender, "'1'='Women';'2'='Men';'3'='Other'"))
+all$Gender<-factor(all$Gender, levels(all$Gender)[c(1,3,2)])
+all$Familiarity<-factor(car::recode(all$Familiarity , "'0'='Not Familiar'; '1'='Familiar'; ''='NA'"))
+all$Familiarity<-factor(all$Familiarity, levels(all$Familiarity)[c(3,1,2)])
+
+
+cormat<-cor(all[c(4:ncol(all))])
+res1 <- cor.mtest(all[c(4:ncol(all))], conf.level = .95)
+
+corrgram(all[c(4:ncol(all))],
+         lower.panel=panel.pts, upper.panel=panel.conf,
+         diag.panel=panel.density)
+```
+
+
+
+```{r Correlation Plot}
+corrplot.mixed(cormat, lower="number", lower.col="black", p.mat = res1$p, sig.level = .05)
+```
+
+
+
+
+## regression model
+
+We wanted to follow up on the pattern of observations we observed for the cfmt, mental rotation, and landmark
+
+```{r}
+mod1<-lm(FaceRecognition~MentalRotation, data=all)
+mod2<-lm(FaceRecognition~LandmarkDirection, data=all)
+mod3<-lm(FaceRecognition~MentalRotation+LandmarkDirection, data=all)
+mod4<-lm(FaceRecognition~MentalRotation*LandmarkDirection, data=all)
+
+tab_model(mod1, mod2, mod3, mod4)
+```
+
+
+```{r}
+plot_model(mod4, type="int")
+```
+
+
+Scatter plot of figure above: 
+```{r}
+ggplot(all, aes(x = FaceRecognition, y = LandmarkDirection, colour=MentalRotation))+
+  geom_point()+
+  geom_smooth(method="lm")
+
+```
+
+#### Regression Diagnostics
+
+```{r}
+par(mfrow = c(2, 2))
+plot(mod4)
+```
+
+```{r}
+# Cook's distance
+plot(mod4, 4)
+# Residuals vs Leverage
+plot(mod4, 5)
+```
+
+
+```{r}
+sub<-all[-c(95, 85, 119, 117, 174, 184),]
+mod1<-lm(FaceRecognition~MentalRotation, data=sub)
+mod2<-lm(FaceRecognition~LandmarkDirection, data=sub)
+mod3<-lm(FaceRecognition~MentalRotation+LandmarkDirection, data=sub)
+mod4<-lm(FaceRecognition~MentalRotation*LandmarkDirection, data=sub)
+
+tab_model(mod1, mod2, mod3, mod4)
+```
+
+
+```{r}
+plot_model(mod4, type="int")
+```
+
+
+# Exploratory Analysis
+
+
+### Performance Split on Gender
+
+Gender breakdown: 
+```{r}
+table(all$Gender)
+
+gen<-melt(all, id=c(1:3), variable.name = "Task")
+```
+
+The analysis shows that men generally tend to be better than women when it comes to navigation tasks, and women did better on the facial recognition task
+
+#### Self-Reported Navigation Ability
+
+```{r}
+graph1<-ddply(gen[grepl("WQ_[NAD]", gen$Task),], .(id, Task, Gender), summarize, 
+              mean=mean(value)
+              )
+graph2<-ddply(graph1, .(Task, Gender), summarize,   
+              dep.avg=mean(mean, na.rm=T),
+              dep.sd=sd(mean, na.rm=T),
+              dep.count=length(mean), 
+              dep.ci=dep.sd*qt(0.975,df=dep.count-1)/sqrt(dep.count))
+# print(graph2)
+ggplot(graph2, aes(x=Task, y=dep.avg, group=Gender, colour=Gender))+
+  geom_point(size=3, position = position_dodge(0))+
+  geom_errorbar(aes(ymax=dep.avg+dep.ci, 
+                    ymin=dep.avg-dep.ci),
+                    width=0, position = position_dodge(0))+
+  theme(
+    panel.background= element_rect(fill=NA), # transparent panel
+    plot.background = element_rect(fill=NA, colour=NA), #transparent background
+    panel.grid=element_blank(), # remove panel grid
+    axis.ticks.x=element_blank(), # remove tick marks on x-axis
+    axis.ticks=element_line(colour="gray70"), # change colour of tick marks
+    panel.border = element_rect(fill="transparent", colour="gray70"), # change panel border colour
+    legend.background = element_rect(fill = "transparent", colour = "transparent"), # change legend background
+    axis.text = element_text(color="#432620"),
+    legend.key = element_rect(fill = "transparent", colour = "transparent")
+  )+
+  scale_shape_manual(values=c(16, 1))+
+  ggtitle("Self-Reported Navigation Ability")+
+  scale_colour_manual(values=wes_palette(n=3, name="GrandBudapest1"))+
+  scale_x_discrete("Subfacets of Navigation", labels=c("Navigation", "Anxiety (Reversed)", "Distance"))+
+  scale_y_continuous("Average Rating (1-7 Likert Scale)", breaks=seq(0, 10,1), limits=c(0,7))
+
+```
+
+
+#### Landmark Location Task
+
+```{r}
+graph1<-ddply(gen[grepl("Land", gen$Task),], .(id, Task, Gender), summarize, 
+              mean=mean(value)
+              )
+graph2<-ddply(graph1, .(Task, Gender), summarize,   
+              dep.avg=mean(mean, na.rm=T),
+              dep.sd=sd(mean, na.rm=T),
+              dep.count=length(mean), 
+              dep.ci=dep.sd*qt(0.975,df=dep.count-1)/sqrt(dep.count))
+# print(graph2)
+ggplot(graph2, aes(x=Task, y=dep.avg, group=Gender, colour=Gender))+
+  geom_point(size=3, position = position_dodge(0.05))+
+  geom_errorbar(aes(ymax=dep.avg+dep.ci, 
+                    ymin=dep.avg-dep.ci),
+                    width=0, position = position_dodge(0.05))+
+  theme(
+    panel.background= element_rect(fill=NA), # transparent panel
+    plot.background = element_rect(fill=NA, colour=NA), #transparent background
+    panel.grid=element_blank(), # remove panel grid
+    axis.ticks.x=element_blank(), # remove tick marks on x-axis
+    axis.ticks=element_line(colour="gray70"), # change colour of tick marks
+    panel.border = element_rect(fill="transparent", colour="gray70"), # change panel border colour
+    legend.background = element_rect(fill = "transparent", colour = "transparent"), # change legend background
+    axis.text = element_text(color="#432620"),
+    legend.key = element_rect(fill = "transparent", colour = "transparent")
+  )+
+  scale_shape_manual(values=c(16, 1))+
+  ggtitle("Landmark Location Task (smaller values is better)")+
+  scale_colour_manual(values=wes_palette(n=3, name="GrandBudapest1"))+
+  scale_x_discrete("")+
+  scale_y_continuous("Difference in Degrees", breaks=seq(0, 100,10), limits = c(0,45))
+
+```
+
+#### Route Retrace, Mental Rotation & Face Processing
+
+```{r}
+graph1<-ddply(gen[grepl("^[RMF]", gen$Task),], .(id, Task, Gender), summarize, 
+              mean=mean(value)
+              )
+graph2<-ddply(graph1, .(Task, Gender), summarize,   
+              dep.avg=mean(mean, na.rm=T),
+              dep.sd=sd(mean, na.rm=T),
+              dep.count=length(mean), 
+              dep.ci=dep.sd*qt(0.975,df=dep.count-1)/sqrt(dep.count))
+# print(graph2)
+ggplot(graph2, aes(x=Task, y=dep.avg, group=Gender, colour=Gender))+
+  geom_point(size=3, position = position_dodge(0.05))+
+  geom_errorbar(aes(ymax=dep.avg+dep.ci, 
+                    ymin=dep.avg-dep.ci),
+                    width=0, position = position_dodge(0.05))+
+  theme(
+    panel.background= element_rect(fill=NA), # transparent panel
+    plot.background = element_rect(fill=NA, colour=NA), #transparent background
+    panel.grid=element_blank(), # remove panel grid
+    axis.ticks.x=element_blank(), # remove tick marks on x-axis
+    axis.ticks=element_line(colour="gray70"), # change colour of tick marks
+    panel.border = element_rect(fill="transparent", colour="gray70"), # change panel border colour
+    legend.background = element_rect(fill = "transparent", colour = "transparent"), # change legend background
+    axis.text = element_text(color="#432620"),
+    legend.key = element_rect(fill = "transparent", colour = "transparent")
+  )+
+  scale_shape_manual(values=c(16, 1))+
+  ggtitle("Route Retrace, Mental Rotation & Face Processing Tasks")+
+  scale_colour_manual(values=wes_palette(n=3, name="GrandBudapest1"))+
+  scale_x_discrete("Tasks")+
+  scale_y_continuous("Proportion Correct", breaks=seq(0, 1,.1), limits = c(0,1))
+
+```
+
+
+Since there aren't enough men in our sample, we next examine whether the pattern of correlation hold for our women sample
+
+```{r}
+women<-subset(all, Gender=="Women")
+
+cormat<-cor(women[c(4:ncol(women))])
+res1 <- cor.mtest(women[c(4:ncol(women))], conf.level = .95)
+
+corrgram(women[c(4:ncol(women))],
+         lower.panel=panel.pts, upper.panel=panel.conf,
+         diag.panel=panel.density)
+```
+
+
+```{r}
+mod1<-lm(FaceRecognition~MentalRotation, data=women)
+mod2<-lm(FaceRecognition~LandmarkDirection, data=women)
+mod3<-lm(FaceRecognition~MentalRotation+LandmarkDirection, data=women)
+mod4<-lm(FaceRecognition~MentalRotation*LandmarkDirection, data=women)
+
+tab_model(mod1, mod2, mod3, mod4)
+```
+
+It seems that the effect is more pronounced in women than for men
+
+```{r}
+plot_model(mod4, type="int")
+```
+
+Just as a comparison, here is the correlation table for men:
+
+```{r}
+men<-subset(all, Gender=="Men")
+
+cormat<-cor(men[c(4:ncol(men))])
+res1 <- cor.mtest(men[c(4:ncol(men))], conf.level = .95)
+
+corrgram(men[c(4:ncol(men))],
+         lower.panel=panel.pts, upper.panel=panel.conf,
+         diag.panel=panel.density)
+```
+
+```{r}
+mod4<-lm(FaceRecognition~MentalRotation*LandmarkDirection, data=men)
+
+plot_model(mod4, type="int")
+```
+
+These results suggest that the effect is more pronounced in women and potentially non-existent in men. 
+
+
+### Familiarity with building
+
+We wanted to explore whether people who were familiar with the building do better in the pointing and navigation tasks.
+
+A breakdown of individuals who were familiar and not familiar with the building
+
+```{r}
+table(all$Familiarity)
+
+```
+
+For the most part, it appears that reported familiarity did not affect individuals' performance on the navigation/landmark location tasks
+
+
+
+#### Landmark Location Task
+
+```{r}
+graph1<-ddply(gen[grepl("Land", gen$Task),], .(id, Task, Familiarity), summarize, 
+              mean=mean(value)
+              )
+graph2<-ddply(graph1, .(Task, Familiarity), summarize,   
+              dep.avg=mean(mean, na.rm=T),
+              dep.sd=sd(mean, na.rm=T),
+              dep.count=length(mean), 
+              dep.ci=dep.sd*qt(0.975,df=dep.count-1)/sqrt(dep.count))
+# print(graph2)
+ggplot(graph2, aes(x=Task, y=dep.avg, group=Familiarity, colour=Familiarity))+
+  geom_point(size=3, position = position_dodge(0.05))+
+  geom_errorbar(aes(ymax=dep.avg+dep.ci, 
+                    ymin=dep.avg-dep.ci),
+                    width=0, position = position_dodge(0.05))+
+  theme(
+    panel.background= element_rect(fill=NA), # transparent panel
+    plot.background = element_rect(fill=NA, colour=NA), #transparent background
+    panel.grid=element_blank(), # remove panel grid
+    axis.ticks.x=element_blank(), # remove tick marks on x-axis
+    axis.ticks=element_line(colour="gray70"), # change colour of tick marks
+    panel.border = element_rect(fill="transparent", colour="gray70"), # change panel border colour
+    legend.background = element_rect(fill = "transparent", colour = "transparent"), # change legend background
+    axis.text = element_text(color="#432620"),
+    legend.key = element_rect(fill = "transparent", colour = "transparent")
+  )+
+  scale_shape_manual(values=c(16, 1))+
+  ggtitle("Landmark Location Task (smaller values is better)")+
+  scale_colour_manual(values=wes_palette(n=3, name="IsleofDogs1"))+
+  scale_x_discrete("")+
+  scale_y_continuous("Difference in Degrees", breaks=seq(0, 100,10), limits = c(0,45))
+
+```
+
+
+#### Route Retrace Task 
+
+```{r}
+graph1<-ddply(gen[grepl("^Route", gen$Task),], .(id, Task,  Familiarity), summarize, 
+              mean=mean(value)
+              )
+graph2<-ddply(graph1, .(Task, Familiarity), summarize,   
+              dep.avg=mean(mean, na.rm=T),
+              dep.sd=sd(mean, na.rm=T),
+              dep.count=length(mean), 
+              dep.ci=dep.sd*qt(0.975,df=dep.count-1)/sqrt(dep.count))
+# print(graph2)
+ggplot(graph2, aes(x=Task, y=dep.avg, group=Familiarity, colour=Familiarity))+
+  geom_point(size=3, position = position_dodge(0.05))+
+  geom_errorbar(aes(ymax=dep.avg+dep.ci, 
+                    ymin=dep.avg-dep.ci),
+                    width=0, position = position_dodge(0.05))+
+  theme(
+    panel.background= element_rect(fill=NA), # transparent panel
+    plot.background = element_rect(fill=NA, colour=NA), #transparent background
+    panel.grid=element_blank(), # remove panel grid
+    axis.ticks.x=element_blank(), # remove tick marks on x-axis
+    axis.ticks=element_line(colour="gray70"), # change colour of tick marks
+    panel.border = element_rect(fill="transparent", colour="gray70"), # change panel border colour
+    legend.background = element_rect(fill = "transparent", colour = "transparent"), # change legend background
+    axis.text = element_text(color="#432620"),
+    legend.key = element_rect(fill = "transparent", colour = "transparent")
+  )+
+  scale_shape_manual(values=c(16, 1))+
+  ggtitle("Route Retrace")+
+  scale_colour_manual(values=wes_palette(n=3, name="IsleofDogs1"))+
+  scale_x_discrete("Tasks")+
+  scale_y_continuous("Proportion Correct", breaks=seq(0, 1,.1), limits = c(0,1))
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+# Confirmatory Factor Analysis (Wayfinding Questionnaire)
+
+### Check For Careless Responding
+```{r}
+library(careless)
+
+careless.string <- cbind(wq$id, longstring(wq, avg = T))
+boxplot(careless.string[c(3)], main = "Boxplot of Longest & Average String index")
+
+careless.sub<-subset(careless.string, longstr>8 & avgstr>2.5)
+
+wq2<-subset(wq, !(id %in% careless.sub$`wq$id`))
+```
+
+### Model 1: Based on Existing Subscales reported in Claessen et al (2016)
+
+```{r efa on wayfinding data}
+
+way.mod <- '
+Navigation =~ 
+WQ_1_1 +
+WQ_1_2 +
+WQ_1_3 +
+WQ_1_6 +
+WQ_1_7 +
+WQ_3_2 +
+WQ_3_4 +
+WQ_3_5 +
+WQ_3_6 +
+WQ_3_7 +
+WQ_3_8 
+
+Anxiety =~
+WQ_1_8 +
+WQ_1_9 +
+WQ_1_10 +
+WQ_1_11 +
+WQ_2_1 +
+WQ_2_2 +
+WQ_2_3 +
+WQ_3_1 
+
+Distance =~
+WQ_1_4 +
+WQ_1_5 +
+WQ_3_3 
+'
+
+fit<-cfa(way.mod, data = wq2, missing="ML")
+
+summary(fit, fit.measures=T)
+
+
+```
+
+Looking at the model, it doesn't look like it has great fit (CFI ~ .8 whereas it should be >.95; RMSEA is .12 whereas it shold be < .08)
+
+# Exploratory Factor Anaysis
+
+To examine bottom-up factor loadings
+
+```{r parallel test}
+parallel<-fa.parallel(wq2[-c(1, 24:26)], fa="pc")
+```
+
+```{r efa}
+threefactor<-fa(wq[-c(1,24:26)], nfactors=3, rotate="varimax")
+
+print(threefactor$loadings,cutoff = 0.41)
+```
+
+There do seem to be 3 factors in total, but very different than the ones reported in Claessen et al 2006
+
+### Second Confirmatory Factor Analysis 
+
+Based on the factor loadings from the EFA
+
+```{r efa on wayfinding data - new proposed model}
+
+way.mod2 <- '
+Navigation =~ 
+WQ_1_1 +
+WQ_1_2 +
+WQ_1_3 +
+WQ_1_6 +
+WQ_1_7 +
+WQ_3_2 +
+WQ_3_4 +
+WQ_3_5 +
+WQ_3_6 +
+WQ_3_7 +
+WQ_3_8 +
+WQ_1_4 +
+WQ_1_5 +
+WQ_3_3 
+
+Anxiety =~
+WQ_1_8 +
+WQ_1_9 +
+WQ_1_10 +
+WQ_1_11 
+
+Lost =~
+WQ_2_1 +
+WQ_2_2 +
+WQ_2_3 +
+WQ_3_1 
+'
+
+fit2<-cfa(way.mod2, data = wq2, missing="ML")
+
+summary(fit2, fit.measures=T)
+
+
+```
+
+
+Model fit has improved (CFI ~ .88; RMSEA ~ .09) but still not awesome.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
